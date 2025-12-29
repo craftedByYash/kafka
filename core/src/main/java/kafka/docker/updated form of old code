@@ -1,0 +1,164 @@
+package org.apache.kafka.metadata;
+
+import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.message.AssignReplicasToDirsRequestData;
+import org.apache.kafka.common.message.AssignReplicasToDirsResponseData;
+import org.apache.kafka.common.protocol.Errors;
+import org.apache.kafka.server.common.TopicIdPartition;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.Map;
+
+public class AssignmentsHelper {
+
+    /**
+     * Build an AssignReplicasToDirsRequestData from a map of TopicIdPartition to Uuid.
+     */
+    public static AssignReplicasToDirsRequestData buildRequestData(
+            int brokerId,
+            long brokerEpoch,
+            Map<TopicIdPartition, Uuid> assignments
+    ) {
+        Map<Uuid, AssignReplicasToDirsRequestData.DirectoryData> directories =
+                new HashMap<>();
+
+        for (Map.Entry<TopicIdPartition, Uuid> entry : assignments.entrySet()) {
+            TopicIdPartition tp = entry.getKey();
+            Uuid directoryId = entry.getValue();
+
+            AssignReplicasToDirsRequestData.DirectoryData directory =
+                    directories.computeIfAbsent(
+                            directoryId,
+                            id -> new AssignReplicasToDirsRequestData.DirectoryData().setId(id)
+                    );
+
+            AssignReplicasToDirsRequestData.TopicData topic =
+                    directory.topics().stream()
+                            .filter(t -> t.topicId().equals(tp.topicId()))
+                            .findFirst()
+                            .orElseGet(() -> {
+                                AssignReplicasToDirsRequestData.TopicData data =
+                                        new AssignReplicasToDirsRequestData.TopicData()
+                                                .setTopicId(tp.topicId());
+                                directory.topics().add(data);
+                                return data;
+                            });
+
+            topic.partitions().add(
+                    new AssignReplicasToDirsRequestData.PartitionData()
+                            .setPartitionIndex(tp.partitionId())
+            );
+        }
+
+        return new AssignReplicasToDirsRequestData()
+                .setBrokerId(brokerId)
+                .setBrokerEpoch(brokerEpoch)
+                .setDirectories(new ArrayList<>(directories.values()));
+    }
+
+    /**
+     * Build an AssignReplicasToDirsResponseData from a map of TopicIdPartition to Errors.
+     */
+    public static AssignReplicasToDirsResponseData buildResponseData(
+            short errorCode,
+            int throttleTimeMs,
+            Map<Uuid, Map<TopicIdPartition, Errors>> errorsByDirectory
+    ) {
+        Map<Uuid, AssignReplicasToDirsResponseData.DirectoryData> directories =
+                new HashMap<>();
+
+        for (Map.Entry<Uuid, Map<TopicIdPartition, Errors>> dirEntry : errorsByDirectory.entrySet()) {
+            Uuid directoryId = dirEntry.getKey();
+
+            AssignReplicasToDirsResponseData.DirectoryData directory =
+                    directories.computeIfAbsent(
+                            directoryId,
+                            id -> new AssignReplicasToDirsResponseData.DirectoryData().setId(id)
+                    );
+
+            for (Map.Entry<TopicIdPartition, Errors> partitionEntry : dirEntry.getValue().entrySet()) {
+                TopicIdPartition tp = partitionEntry.getKey();
+                Errors error = partitionEntry.getValue();
+
+                AssignReplicasToDirsResponseData.TopicData topic =
+                        directory.topics().stream()
+                                .filter(t -> t.topicId().equals(tp.topicId()))
+                                .findFirst()
+                                .orElseGet(() -> {
+                                    AssignReplicasToDirsResponseData.TopicData data =
+                                            new AssignReplicasToDirsResponseData.TopicData()
+                                                    .setTopicId(tp.topicId());
+                                    directory.topics().add(data);
+                                    return data;
+                                });
+
+                topic.partitions().add(
+                        new AssignReplicasToDirsResponseData.PartitionData()
+                                .setPartitionIndex(tp.partitionId())
+                                .setErrorCode(error.code())
+                );
+            }
+        }
+
+        return new AssignReplicasToDirsResponseData()
+                .setErrorCode(errorCode)
+                .setThrottleTimeMs(throttleTimeMs)
+                .setDirectories(new ArrayList<>(directories.values()));
+    }
+
+    /**
+     * Normalize the request data by sorting directories, topics, and partitions.
+     */
+    public static AssignReplicasToDirsRequestData normalize(
+            AssignReplicasToDirsRequestData request
+    ) {
+        AssignReplicasToDirsRequestData copy = request.duplicate();
+
+        copy.directories().sort(
+                Comparator.comparing(AssignReplicasToDirsRequestData.DirectoryData::id)
+        );
+
+        for (AssignReplicasToDirsRequestData.DirectoryData directory : copy.directories()) {
+            directory.topics().sort(
+                    Comparator.comparing(AssignReplicasToDirsRequestData.TopicData::topicId)
+            );
+            for (AssignReplicasToDirsRequestData.TopicData topic : directory.topics()) {
+                topic.partitions().sort(
+                        Comparator.comparing(
+                                AssignReplicasToDirsRequestData.PartitionData::partitionIndex
+                        )
+                );
+            }
+        }
+        return copy;
+    }
+
+    /**
+     * Normalize the response data by sorting directories, topics, and partitions.
+     */
+    public static AssignReplicasToDirsResponseData normalize(
+            AssignReplicasToDirsResponseData response
+    ) {
+        AssignReplicasToDirsResponseData copy = response.duplicate();
+
+        copy.directories().sort(
+                Comparator.comparing(AssignReplicasToDirsResponseData.DirectoryData::id)
+        );
+
+        for (AssignReplicasToDirsResponseData.DirectoryData directory : copy.directories()) {
+            directory.topics().sort(
+                    Comparator.comparing(AssignReplicasToDirsResponseData.TopicData::topicId)
+            );
+            for (AssignReplicasToDirsResponseData.TopicData topic : directory.topics()) {
+                topic.partitions().sort(
+                        Comparator.comparing(
+                                AssignReplicasToDirsResponseData.PartitionData::partitionIndex
+                        )
+                );
+            }
+        }
+        return copy;
+    }
+}
